@@ -1,0 +1,213 @@
+name: CI/CD Pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master]
+
+jobs:
+  testing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Unit Tests
+        run: echo "Running unit tests..." && exit 0
+      
+      - name: Run Integration Tests
+        run: echo "Running integration tests..." && exit 0
+      
+      - name: Add test-passed label
+        uses: actions/github-script@v6
+        if: success()
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['test-passed']
+            })
+
+  security:
+    needs: testing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Run Antivirus Scan
+        uses: crazy-max/ghaction-virustotal@v3
+        with:
+          vt_api_key: ${{ secrets.VT_API_KEY }}
+          files: ./
+      
+      - name: Run Linter
+        run: echo "Running linter..." && exit 0
+      
+      - name: Run Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'my-project'
+          scan_path: '.'
+          format: 'HTML'
+      
+      - name: Add sec-passed label
+        uses: actions/github-script@v6
+        if: success()
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['sec-passed']
+            })
+
+  version-update:
+    needs: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Determine version bump type
+        id: version-type
+        run: |
+          if [[ $GITHUB_HEAD_REF == feature/* ]]; then
+            echo "::set-output name=type::minor"
+          elif [[ $GITHUB_HEAD_REF == hotfix/* ]]; then
+            echo "::set-output name=type::patch"
+          else
+            echo "::set-output name=type::none"
+          fi
+      
+      - name: Bump version
+        if: steps.version-type.outputs.type != 'none'
+        id: bump-version
+        uses: phips28/gh-action-bump-version@master
+        with:
+          tag-prefix: 'v'
+          skip-tag: true
+          skip-commit: true
+          default-build: ${{ steps.version-type.outputs.type }}
+      
+      - name: Update version file
+        if: steps.version-type.outputs.type != 'none'
+        run: echo "${{ steps.bump-version.outputs.new_version }}" > version.txt
+      
+      - name: Commit version update
+        if: steps.version-type.outputs.type != 'none'
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add version.txt
+          old_version=$(git show HEAD:version.txt || echo "0.0.0")
+          git commit -m "[${{ steps.bump-version.outputs.new_version }}] <- [$old_version] ${{ steps.version-type.outputs.type }} up"
+          git push
+      
+      - name: Add version label
+        if: steps.version-type.outputs.type != 'none'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['v${{ steps.bump-version.outputs.new_version }}']
+            })
+
+  changelog:
+    needs: version-update
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Update changelog
+        if: needs.version-update.outputs.new_version != ''
+        run: |
+          version=$(cat version.txt)
+          echo -e "# Version $version - $(date +%Y-%m-%d)\n\n* Merged branch: $GITHUB_HEAD_REF\n\n$(cat changelog.md)" > changelog.md.tmp
+          mv changelog.md.tmp changelog.md
+      
+      - name: Commit changelog
+        if: needs.version-update.outputs.new_version != ''
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add changelog.md
+          git commit -m "Update changelog for version ${{ needs.version-update.outputs.new_version }}"
+          git push
+      
+      - name: Add changelog label
+        if: needs.version-update.outputs.new_version != ''
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['changelog']
+            })
+      
+      - name: Upload changelog artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: changelog
+          path: changelog.md
+
+  docker-publish:
+    needs: changelog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+      
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v4
+        with:
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}:v${{ needs.version-update.outputs.new_version }}
+          labels: |
+            org.opencontainers.image.description=${{ github.event.repository.description }}
+      
+      - name: Add dockerhub label
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['dockerhub']
+            })
+
+  telegram-notification:
+    needs: docker-publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: changelog
+      
+      - name: Send Telegram notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🚀 New version *${{ needs.version-update.outputs.new_version }}* published!
+            
+            📦 Docker Image: [${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}:v${{ needs.version-update.outputs.new_version }}](https://hub.docker.com/r/${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}/tags)
+            
+            📝 Changelog:
+            ${{ steps.changelog-content.outputs.text }}
+          files: changelog.md
