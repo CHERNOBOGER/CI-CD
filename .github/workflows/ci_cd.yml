@@ -79,123 +79,108 @@ jobs:
   version-update:
     needs: security
     runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.bump-version.outputs.new_tag }}
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Get current version
-      id: version
-      run: |
-        if [ -f "$VERSION_FILE" ]; then
-          echo "current_version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
-        else
-          echo "current_version=0.0.0" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Determine version bump type
-      id: bump-type
-      run: |
-        if [[ $GITHUB_REF == refs/heads/feature* ]]; then
-          echo "type=minor" >> $GITHUB_OUTPUT
-        elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
-          echo "type=patch" >> $GITHUB_OUTPUT
-        else
-          echo "type=none" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Bump version
-      id: bump-version
-      if: steps.bump-type.outputs.type != 'none'
-      uses: mathieudutour/github-tag-action@v6.1
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        tag_prefix: v
-        default_bump: ${{ steps.bump-type.outputs.type }}
-    
-    - name: Update version file
-      if: steps.bump-version.outputs.new_tag
-      run: |
-        new_version=${GITHUB_REF#refs/tags/v}
-        echo "$new_version" > $VERSION_FILE
-        echo "Old version: ${{ steps.version.outputs.current_version }}"
-        echo "New version: $new_version"
-    
-    - name: Commit version update
-      if: steps.bump-version.outputs.new_tag
-      run: |
-        git config --global user.name 'GitHub Actions'
-        git config --global user.email 'actions@github.com'
-        git add $VERSION_FILE
-        old_version=${{ steps.version.outputs.current_version }}
-        new_version=${GITHUB_REF#refs/tags/v}
-        commit_msg="[$new_version] <- [$old_version] ${{ steps.bump-type.outputs.type }} up"
-        git commit -m "$commit_msg"
-        git push
-    
-    - name: Add version label
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request' && steps.bump-version.outputs.new_tag
-      with:
-        script: |
-          try {
-            const newVersion = '${{ steps.bump-version.outputs.new_tag }}'.replace('v', '');
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: [newVersion]
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Initialize version file
+        run: |
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "0.0.0" > $VERSION_FILE
+          fi
+      
+      - name: Determine version bump type
+        id: bump-type
+        run: |
+          if [[ $GITHUB_REF == refs/heads/feature* ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+          else
+            echo "type=none" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Bump version
+        id: bump-version
+        if: steps.bump-type.outputs.type != 'none'
+        run: |
+          current_version=$(cat $VERSION_FILE)
+          IFS='.' read -ra parts <<< "$current_version"
+          major=${parts[0]}
+          minor=${parts[1]}
+          patch=${parts[2]}
+          
+          if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
+            minor=$((minor + 1))
+            patch=0
+          else
+            patch=$((patch + 1))
+          fi
+          
+          new_version="$major.$minor.$patch"
+          echo "$new_version" > $VERSION_FILE
+          echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+          echo "Old version: $current_version"
+          echo "New version: $new_version"
+      
+      - name: Commit version update
+        if: steps.bump-version.outputs.new_tag
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add $VERSION_FILE
+          git commit -m "[$(cat $VERSION_FILE)] version update"
+          git push
 
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Update changelog
-      if: steps.bump-version.outputs.new_tag
-      run: |
-        new_version=${GITHUB_REF#refs/tags/v}
-        branch_name=${GITHUB_REF#refs/heads/}
-        current_date=$(date +'%Y-%m-%d')
-        
-        echo -e "## Version $new_version ($current_date)\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
-        mv temp_changelog $CHANGELOG_FILE
-        
-        cat $CHANGELOG_FILE
-    
-    - name: Commit changelog
-      if: steps.bump-version.outputs.new_tag
-      run: |
-        git config --global user.name 'GitHub Actions'
-        git config --global user.email 'actions@github.com'
-        git add $CHANGELOG_FILE
-        git commit -m "Update changelog for version ${GITHUB_REF#refs/tags/v}"
-        git push
-    
-    - name: Add changelog label
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request' && steps.bump-version.outputs.new_tag
-      with:
-        script: |
-          try {
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['changelog']
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
-    
-    - name: Upload changelog as artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: changelog
-        path: ${{ env.CHANGELOG_FILE }}
+      - uses: actions/checkout@v4
+      
+      - name: Initialize changelog
+        run: |
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "# Changelog" > $CHANGELOG_FILE
+            echo "" >> $CHANGELOG_FILE
+            echo "## [Unreleased]" >> $CHANGELOG_FILE
+            echo "- Initial version" >> $CHANGELOG_FILE
+          fi
+      
+      - name: Update changelog
+        if: needs.version-update.outputs.new_version
+        run: |
+          version=${GITHUB_REF#refs/tags/v}
+          if [ -z "$version" ]; then
+            version=$(cat $VERSION_FILE)
+          fi
+          
+          current_date=$(date +'%Y-%m-%d')
+          branch_name=${GITHUB_REF#refs/heads/}
+          
+          # Вставляем новую версию в начало файла
+          echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
+          mv temp_changelog $CHANGELOG_FILE
+          
+          # Показываем содержимое для отладки
+          cat $CHANGELOG_FILE
+      
+      - name: Commit changelog
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
+          git add $CHANGELOG_FILE
+          git commit -m "Update changelog for version $(cat $VERSION_FILE)"
+          git push
+      
+      - name: Upload changelog
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: $CHANGELOG_FILE
 
   docker-publish:
    needs: changelog
@@ -237,22 +222,27 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/download-artifact@v4
-      with:
-        name: changelog
-    
-    - name: Send Telegram notification
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_CHAT_ID }}
-        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        message: |
-          🚀 New version *v${{ needs.version-update.outputs.new_tag }}* deployed!
-          📝 Changelog: https://github.com/${{ github.repository }}/blob/main/changelog.md
-          🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
-          🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-        file: ${{ env.CHANGELOG_FILE }}
-
+      - name: Download changelog
+        uses: actions/download-artifact@v4
+        with:
+          name: changelog
+      
+      - name: Get version
+        id: get-version
+        run: |
+          echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
+      
+      - name: Send Telegram notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🚀 New version *v${{ steps.get-version.outputs.version }}* deployed!
+            📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
+            🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
+            🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          file: $CHANGELOG_FILE
   deploy-prod:
     needs: telegram-notify
     runs-on: ubuntu-latest
