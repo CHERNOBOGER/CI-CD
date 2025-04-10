@@ -148,6 +148,7 @@ jobs:
           git add $VERSION_FILE
           commit_message="[${{ steps.set-version.outputs.new_version }}] <- [${{ steps.get-version.outputs.old_version }}] ${{ steps.bump-type.outputs.type }} up"
           git commit -m "$commit_message"
+          git pull --rebase origin $GITHUB_REF_NAME
           git push
       
       - name: Add version label
@@ -207,6 +208,7 @@ jobs:
           git config --global user.email 'actions@github.com'
           git add $CHANGELOG_FILE
           git commit -m "Update changelog for version ${{ needs.version-update.outputs.new_version }}" || echo "No changes to commit"
+          git pull --rebase origin $GITHUB_REF_NAME
           git push
       
       - name: Upload changelog artifact
