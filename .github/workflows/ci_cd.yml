@@ -235,44 +235,54 @@ jobs:
             console.error('Error adding label:', error)
           }
 
-  telegram-notify:
-    needs: docker-publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: Get actual version
-        id: get-version
-        run: |
-          # Читаем версию из файла, удаляя все лишние символы
-          version=$(cat version | tr -d '\r\n' | xargs)
-          echo "version=${version:-0.0.0}" >> $GITHUB_OUTPUT
-          echo "Actual version: ${version:-0.0.0}"
-      
-      - name: Prepare changelog
-        run: |
-          if [ ! -f "changelog.md" ]; then
-            echo "# Changelog" > changelog.md
-            echo "## [Unreleased]" >> changelog.md
-          fi
-      
-      - name: Create notification message
-        id: create-message
-        run: |
-          current_date=$(date +'%Y-%m-%d')
-          message="🚀 New release: *v${{ steps.get-version.outputs.version }}*"
-          message+="%0A%0A📝 *Changes in this version:*"
-          message+="%0A$(grep -A 5 "## \[${{ steps.get-version.outputs.version }}" changelog.md | tail -n +2 | sed '/^##/q' | head -n -1 | sed 's/^/- /')"
-          message+="%0A%0A🔗 *Full changelog:*"
-          message+="%0Ahttps://github.com/${{ github.repository }}/blob/main/changelog.md"
+telegram-notify:
+  needs: docker-publish
+  runs-on: ubuntu-latest
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get exact version
+      id: version
+      run: |
+        clean_version=$(cat version | tr -d '\r\n' | xargs)
+        if [ -z "$clean_version" ]; then
+          clean_version="0.0.0"
+        fi
+        echo "version=$clean_version" >> $GITHUB_OUTPUT
+        echo "Using version: $clean_version"
+
+    - name: Prepare changelog content
+      id: changelog
+      run: |
+        # Извлекаем изменения для текущей версии
+        version=${{ steps.version.outputs.version }}
+        changes=$(awk -v version="## [$version]" '$0 ~ version {flag=1; next} /^## / {flag=0} flag' changelog.md | sed '/^$/d' | sed 's/^/- /')
+        
+        if [ -z "$changes" ]; then
+          changes="No changes listed"
+        fi
+        
+        echo "changes<<EOF" >> $GITHUB_OUTPUT
+        echo "$changes" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        parse_mode: markdown
+        message: |
+          🚀 New version *v${{ steps.version.outputs.version }}* deployed!
           
-          echo "message=${message}" >> $GITHUB_OUTPUT
-      
-      - name: Send Telegram notification
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: ${{ steps.create-message.outputs.message }}
-          parse_mode: markdown
+          📝 Changes:
+          ${{ steps.changelog.outputs.changes }}
+          
+          🔗 [View full changelog](https://github.com/${{ github.repository }}/blob/main/changelog.md)
+
 
   deploy-prod:
     needs: telegram-notify
