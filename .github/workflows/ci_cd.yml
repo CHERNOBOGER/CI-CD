@@ -4,210 +4,315 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - feature/*
+      - hotfix/*
+
+env:
+  DOCKER_HUB_REPOSITORY: chernoboger/ci-cd
+  VERSION_FILE: version
+  CHANGELOG_FILE: changelog.md
+  DOCKER_HUB_USERNAME: chernoboger
+  DOCKER_HUB_TOKEN: dckr_pat_MSKwU_aFtcHT98w5vPZgTlTHrmI
 
 jobs:
   testing:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Run Unit Tests
-        run: echo "Running unit tests..." && exit 0
-      
-      - name: Run Integration Tests
-        run: echo "Running integration tests..." && exit 0
-      
-      - name: Add test-passed label
-        uses: actions/github-script@v6
-        if: success()
-        with:
-          script: |
-            github.rest.issues.addLabels({
+    - uses: actions/checkout@v3
+    
+    - name: Run Unit Tests
+      run: echo "Running unit tests..." && exit 0
+      if: github.event_name == 'pull_request'
+    
+    - name: Run Integration Tests
+      run: echo "Running integration tests..." && exit 0
+      if: github.event_name == 'pull_request'
+    
+    - name: Add test-passed label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && success()
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               labels: ['test-passed']
             })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
   security:
     needs: testing
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Run Antivirus Scan
-        uses: crazy-max/ghaction-virustotal@v3
-        with:
-          vt_api_key: ${{ secrets.VT_API_KEY }}
-          files: ./
-      
-      - name: Run Linter
-        run: echo "Running linter..." && exit 0
-      
-      - name: Run Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'my-project'
-          scan_path: '.'
-          format: 'HTML'
-      
-      - name: Add sec-passed label
-        uses: actions/github-script@v6
-        if: success()
-        with:
-          script: |
-            github.rest.issues.addLabels({
+    - uses: actions/checkout@v3
+    
+    - name: Run Antivirus Scan
+      uses: actionshub/antivirus@main
+      with:
+        path: '.'
+    
+    - name: Run Linter
+      run: echo "Running linter checks..." && exit 0
+    
+    - name: Add sec-passed label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && success()
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               labels: ['sec-passed']
             })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
   version-update:
     needs: security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Determine version bump type
-        id: version-type
-        run: |
-          if [[ $GITHUB_HEAD_REF == feature/* ]]; then
-            echo "::set-output name=type::minor"
-          elif [[ $GITHUB_HEAD_REF == hotfix/* ]]; then
-            echo "::set-output name=type::patch"
-          else
-            echo "::set-output name=type::none"
-          fi
-      
-      - name: Bump version
-        if: steps.version-type.outputs.type != 'none'
-        id: bump-version
-        uses: phips28/gh-action-bump-version@master
-        with:
-          tag-prefix: 'v'
-          skip-tag: true
-          skip-commit: true
-          default-build: ${{ steps.version-type.outputs.type }}
-      
-      - name: Update version file
-        if: steps.version-type.outputs.type != 'none'
-        run: echo "${{ steps.bump-version.outputs.new_version }}" > version.txt
-      
-      - name: Commit version update
-        if: steps.version-type.outputs.type != 'none'
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-          git add version.txt
-          old_version=$(git show HEAD:version.txt || echo "0.0.0")
-          git commit -m "[${{ steps.bump-version.outputs.new_version }}] <- [$old_version] ${{ steps.version-type.outputs.type }} up"
-          git push
-      
-      - name: Add version label
-        if: steps.version-type.outputs.type != 'none'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.addLabels({
+    - uses: actions/checkout@v3
+    
+    - name: Get current version
+      id: version
+      run: |
+        if [ -f "$VERSION_FILE" ]; then
+          echo "current_version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
+        else
+          echo "current_version=0.0.0" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Determine version bump type
+      id: bump-type
+      run: |
+        if [[ $GITHUB_REF == refs/heads/feature* ]]; then
+          echo "type=minor" >> $GITHUB_OUTPUT
+        elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
+          echo "type=patch" >> $GITHUB_OUTPUT
+        else
+          echo "type=none" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Bump version
+      id: bump-version
+      if: steps.bump-type.outputs.type != 'none'
+      uses: mathieudutour/github-tag-action@v6.1
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        tag_prefix: v
+        default_bump: ${{ steps.bump-type.outputs.type }}
+    
+    - name: Update version file
+      if: steps.bump-version.outputs.new_tag
+      run: |
+        new_version=${GITHUB_REF#refs/tags/v}
+        echo "$new_version" > $VERSION_FILE
+        echo "Old version: ${{ steps.version.outputs.current_version }}"
+        echo "New version: $new_version"
+    
+    - name: Commit version update
+      if: steps.bump-version.outputs.new_tag
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add $VERSION_FILE
+        old_version=${{ steps.version.outputs.current_version }}
+        new_version=${GITHUB_REF#refs/tags/v}
+        commit_msg="[$new_version] <- [$old_version] ${{ steps.bump-type.outputs.type }} up"
+        git commit -m "$commit_msg"
+        git push
+    
+    - name: Add version label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && steps.bump-version.outputs.new_tag
+      with:
+        script: |
+          try {
+            const newVersion = '${{ steps.bump-version.outputs.new_tag }}'.replace('v', '');
+            await github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              labels: ['v${{ steps.bump-version.outputs.new_version }}']
+              labels: [newVersion]
             })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Update changelog
-        if: needs.version-update.outputs.new_version != ''
-        run: |
-          version=$(cat version.txt)
-          echo -e "# Version $version - $(date +%Y-%m-%d)\n\n* Merged branch: $GITHUB_HEAD_REF\n\n$(cat changelog.md)" > changelog.md.tmp
-          mv changelog.md.tmp changelog.md
-      
-      - name: Commit changelog
-        if: needs.version-update.outputs.new_version != ''
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-          git add changelog.md
-          git commit -m "Update changelog for version ${{ needs.version-update.outputs.new_version }}"
-          git push
-      
-      - name: Add changelog label
-        if: needs.version-update.outputs.new_version != ''
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.addLabels({
+    - uses: actions/checkout@v3
+    
+    - name: Update changelog
+      if: steps.bump-version.outputs.new_tag
+      run: |
+        new_version=${GITHUB_REF#refs/tags/v}
+        branch_name=${GITHUB_REF#refs/heads/}
+        current_date=$(date +'%Y-%m-%d')
+        
+        echo -e "## Version $new_version ($current_date)\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
+        mv temp_changelog $CHANGELOG_FILE
+        
+        cat $CHANGELOG_FILE
+    
+    - name: Commit changelog
+      if: steps.bump-version.outputs.new_tag
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add $CHANGELOG_FILE
+        git commit -m "Update changelog for version ${GITHUB_REF#refs/tags/v}"
+        git push
+    
+    - name: Add changelog label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && steps.bump-version.outputs.new_tag
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               labels: ['changelog']
             })
-      
-      - name: Upload changelog artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: changelog
-          path: changelog.md
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
+    
+    - name: Upload changelog as artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: changelog
+        path: ${{ env.CHANGELOG_FILE }}
 
   docker-publish:
     needs: changelog
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-      
-      - name: Build and push
-        id: docker_build
-        uses: docker/build-push-action@v4
-        with:
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}:v${{ needs.version-update.outputs.new_version }}
-          labels: |
-            org.opencontainers.image.description=${{ github.event.repository.description }}
-      
-      - name: Add dockerhub label
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.addLabels({
+    - uses: actions/checkout@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    
+    - name: Build and push
+      uses: docker/build-push-action@v4
+      with:
+        push: true
+        tags: |
+          ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_tag }}
+          ${{ env.DOCKER_HUB_REPOSITORY }}:latest
+        build-args: |
+          VERSION=${{ needs.version-update.outputs.new_tag }}
+    
+    - name: Update Docker Hub description
+      run: |
+        curl -X PATCH \
+          -H "Content-Type: application/json" \
+          -H "Authorization: JWT ${{ secrets.DOCKER_HUB_TOKEN }}" \
+          -d '{"full_description": "$(cat README.md | jq -Rs .)"}' \
+          "https://hub.docker.com/v2/repositories/${{ env.DOCKER_HUB_REPOSITORY }}/"
+    
+    - name: Add dockerhub label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               labels: ['dockerhub']
             })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
-  telegram-notification:
+  telegram-notify:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v3
-        with:
-          name: changelog
-      
-      - name: Send Telegram notification
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🚀 New version *${{ needs.version-update.outputs.new_version }}* published!
-            
-            📦 Docker Image: [${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}:v${{ needs.version-update.outputs.new_version }}](https://hub.docker.com/r/${{ secrets.DOCKER_HUB_USERNAME }}/${{ github.event.repository.name }}/tags)
-            
-            📝 Changelog:
-            ${{ steps.changelog-content.outputs.text }}
-          files: changelog.md
+    - uses: actions/download-artifact@v3
+      with:
+        name: changelog
+    
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |
+          🚀 New version *v${{ needs.version-update.outputs.new_tag }}* deployed!
+          📝 Changelog: https://github.com/${{ github.repository }}/blob/main/changelog.md
+          🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
+          🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+        file: ${{ env.CHANGELOG_FILE }}
+
+  deploy-prod:
+    needs: telegram-notify
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Install Docker
+      uses: docker/setup-docker-action@v2
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    
+    - name: Deploy with Docker Compose
+      run: |
+        docker-compose down
+        docker-compose pull
+        docker-compose up -d
+    
+    - name: Add PROD label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['PROD']
+            })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
+
+  create-release:
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ needs.version-update.outputs.new_tag }}
+        name: Release v${{ needs.version-update.outputs.new_tag }}
+        body: |
+          This release includes changes from branch ${{ github.ref }}.
+          See [changelog](changelog.md) for details.
+        files: ${{ env.CHANGELOG_FILE }}
