@@ -52,10 +52,12 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
-    - name: Run ClamAV Scan
-      uses: docker/github-actions/clamav@v1
+    - name: Scan for vulnerabilities
+      uses: aquasecurity/trivy-action@master
       with:
-        path: '.'
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
     
     - name: Run Linter
       run: echo "Running linter checks..." && exit 0
