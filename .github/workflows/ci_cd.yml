@@ -52,8 +52,8 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
-    - name: Run Antivirus Scan
-      uses: actionshub/antivirus@main
+    - name: Run ClamAV Scan
+      uses: docker/github-actions/clamav@v1
       with:
         path: '.'
     
