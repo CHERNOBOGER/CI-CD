@@ -249,9 +249,7 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
             🚀 New version *v${{ steps.version.outputs.version }}* deployed!
-            📅 Date: $(date +'%Y-%m-%d')
-            🐳 Image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.version.outputs.version }}
-            🔗 Changes: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
+            🔗 Repository: https://github.com/${{ github.repository }}
           document: $CHANGELOG_FILE
 
   deploy-prod:
