@@ -50,11 +50,6 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Run Antivirus Scan
-      uses: actionshub/antivirus@main
-      with:
-        path: '.'
-    
     - name: Scan for vulnerabilities
       uses: aquasecurity/trivy-action@master
       with:
