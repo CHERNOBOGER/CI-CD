@@ -84,76 +84,68 @@ jobs:
     outputs:
       new_version: ${{ steps.set-version.outputs.new_version }}
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-    
-    - name: Initialize version file
-      run: |
-        if [ ! -f "$VERSION_FILE" ]; then
-          echo "0.0.0" > $VERSION_FILE
-          git add $VERSION_FILE
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Initialize version file
+        run: |
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo -n "0.0.0" > $VERSION_FILE
+            git add $VERSION_FILE
+            git config --global user.name 'GitHub Actions'
+            git config --global user.email 'actions@github.com'
+            git commit -m "Initialize version file [0.0.0]"
+            git push
+          fi
+          # Удаляем BOM если он есть
+          sed -i '1s/^\xEF\xBB\xBF//' $VERSION_FILE
+          cat $VERSION_FILE
+      
+      - name: Backup current version
+        run: |
+          cat $VERSION_FILE | tr -d '\r\n' > $VERSION_FILE.clean
+          mv $VERSION_FILE.clean $VERSION_FILE
+          cp $VERSION_FILE $VERSION_FILE.old
+      
+      - name: Determine version bump type
+        id: bump-type
+        run: |
+          if [[ $GITHUB_REF == refs/heads/feature* ]]; then
+            echo "type=minor" >> $GITHUB_OUTPUT
+          elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
+            echo "type=patch" >> $GITHUB_OUTPUT
+          else
+            echo "type=none" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Bump version
+        id: set-version
+        if: steps.bump-type.outputs.type != 'none'
+        run: |
+          current_version=$(cat $VERSION_FILE | tr -d '\r\n')
+          IFS='.' read -ra parts <<< "$current_version"
+          
+          if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
+            new_version="${parts[0]}.$((${parts[1]} + 1)).0"
+          else
+            new_version="${parts[0]}.${parts[1]}.$((${parts[2]} + 1))"
+          fi
+          
+          echo -n "$new_version" > $VERSION_FILE
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          echo "Version bumped from $current_version to $new_version"
+      
+      - name: Commit version update
+        if: steps.bump-type.outputs.type != 'none'
+        run: |
+          old_version=$(cat $VERSION_FILE.old | tr -d '\r\n')
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          git commit -m "Initialize version file [0.0.0]"
+          git add $VERSION_FILE
+          git commit -m "[$(cat $VERSION_FILE)] <- [$old_version] ${{ steps.bump-type.outputs.type }} up"
           git push
-        fi
-        cp $VERSION_FILE $VERSION_FILE.old
-    
-    - name: Determine version bump type
-      id: bump-type
-      run: |
-        if [[ $GITHUB_REF == refs/heads/feature* ]]; then
-          echo "type=minor" >> $GITHUB_OUTPUT
-        elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
-          echo "type=patch" >> $GITHUB_OUTPUT
-        else
-          echo "type=none" >> $GITHUB_OUTPUT
-        fi
-    
-    - name: Bump version
-      id: set-version
-      if: steps.bump-type.outputs.type != 'none'
-      run: |
-        current_version=$(cat $VERSION_FILE)
-        IFS='.' read -ra parts <<< "$current_version"
-        
-        if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
-          new_version="${parts[0]}.$((${parts[1]} + 1)).0"
-        else
-          new_version="${parts[0]}.${parts[1]}.$((${parts[2]} + 1))"
-        fi
-        
-        echo "$new_version" > $VERSION_FILE
-        echo "new_version=$new_version" >> $GITHUB_OUTPUT
-        echo "Version bumped from $current_version to $new_version"
-    
-    - name: Commit version update
-      if: steps.bump-type.outputs.type != 'none'
-      run: |
-        old_version=$(cat $VERSION_FILE.old)
-        git config --global user.name 'GitHub Actions'
-        git config --global user.email 'actions@github.com'
-        git add $VERSION_FILE
-        git commit -m "[$(cat $VERSION_FILE)] <- [$old_version] ${{ steps.bump-type.outputs.type }} up"
-        git push
-    
-    - name: Add version label
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request' && steps.bump-type.outputs.type != 'none'
-      with:
-        script: |
-          try {
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['v${{ steps.set-version.outputs.new_version }}']
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
-
+          
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
