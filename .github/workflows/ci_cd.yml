@@ -228,31 +228,30 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Download changelog artifact
+      - name: Get version
+        id: version
+        run: |
+          if [ -f "$VERSION_FILE" ]; then
+            echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
+          else
+            echo "version=0.0.0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Download changelog
         uses: actions/download-artifact@v4
         with:
           name: changelog
-          path: . 
-      
-      - name: Verify changelog exists
-        run: |
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "# Emergency Changelog" > $CHANGELOG_FILE
-            echo "## Version $(cat $VERSION_FILE)" >> $CHANGELOG_FILE
-            echo "- Created automatically" >> $CHANGELOG_FILE
-          fi
-          cat $CHANGELOG_FILE
-      
+          
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           message: |
-            🚀 New version *v${{ needs.version-update.outputs.new_version }}* deployed!
-            📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
-            🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
-            🔗 Commit: [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
+            📅 Date: $(date +'%Y-%m-%d')
+            🐳 Image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.version.outputs.version }}
+            🔗 Changes: https://github.com/${{ github.repository }}/commit/${{ github.sha }}
           document: $CHANGELOG_FILE
 
   deploy-prod:
@@ -264,12 +263,6 @@ jobs:
       - name: Set up Docker
         uses: docker/setup-docker-action@v3
         
-      - name: Install Docker Compose
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y docker-compose-plugin
-          docker compose version
-      
       - name: Login to Docker Hub
         uses: docker/login-action@v2
         with:
