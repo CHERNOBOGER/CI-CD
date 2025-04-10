@@ -235,54 +235,53 @@ jobs:
             console.error('Error adding label:', error)
           }
 
-telegram-notify:
-  needs: docker-publish
-  runs-on: ubuntu-latest
-  steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Get exact version
-      id: version
-      run: |
-        clean_version=$(cat version | tr -d '\r\n' | xargs)
-        if [ -z "$clean_version" ]; then
-          clean_version="0.0.0"
-        fi
-        echo "version=$clean_version" >> $GITHUB_OUTPUT
-        echo "Using version: $clean_version"
-
-    - name: Prepare changelog content
-      id: changelog
-      run: |
-        # Извлекаем изменения для текущей версии
-        version=${{ steps.version.outputs.version }}
-        changes=$(awk -v version="## [$version]" '$0 ~ version {flag=1; next} /^## / {flag=0} flag' changelog.md | sed '/^$/d' | sed 's/^/- /')
-        
-        if [ -z "$changes" ]; then
-          changes="No changes listed"
-        fi
-        
-        echo "changes<<EOF" >> $GITHUB_OUTPUT
-        echo "$changes" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-    - name: Send Telegram notification
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_CHAT_ID }}
-        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        parse_mode: markdown
-        message: |
-          🚀 New version *v${{ steps.version.outputs.version }}* deployed!
+  telegram-notify:
+    needs: docker-publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+  
+      - name: Get exact version
+        id: version
+        run: |
+          clean_version=$(cat version | tr -d '\r\n' | xargs)
+          if [ -z "$clean_version" ]; then
+            clean_version="0.0.0"
+          fi
+          echo "version=$clean_version" >> $GITHUB_OUTPUT
+          echo "Using version: $clean_version"
+  
+      - name: Prepare changelog content
+        id: changelog
+        run: |
+          # Извлекаем изменения для текущей версии
+          version=${{ steps.version.outputs.version }}
+          changes=$(awk -v version="## [$version]" '$0 ~ version {flag=1; next} /^## / {flag=0} flag' changelog.md | sed '/^$/d' | sed 's/^/- /')
           
-          📝 Changes:
-          ${{ steps.changelog.outputs.changes }}
+          if [ -z "$changes" ]; then
+            changes="No changes listed"
+          fi
           
-          🔗 [View full changelog](https://github.com/${{ github.repository }}/blob/main/changelog.md)
-
+          echo "changes<<EOF" >> $GITHUB_OUTPUT
+          echo "$changes" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+  
+      - name: Send Telegram notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          parse_mode: markdown
+          message: |
+            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
+            
+            📝 Changes:
+            ${{ steps.changelog.outputs.changes }}
+            
+            🔗 [View full changelog](https://github.com/${{ github.repository }}/blob/main/changelog.md)
 
   deploy-prod:
     needs: telegram-notify
