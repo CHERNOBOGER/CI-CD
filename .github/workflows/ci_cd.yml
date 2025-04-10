@@ -160,60 +160,51 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Initialize changelog
-      run: |
-        if [ ! -f "$CHANGELOG_FILE" ]; then
-          echo "# Changelog" > $CHANGELOG_FILE
-          echo "" >> $CHANGELOG_FILE
-          echo "## [Unreleased]" >> $CHANGELOG_FILE
-          echo "- Initial version" >> $CHANGELOG_FILE
+      - uses: actions/checkout@v4
+      
+      
+      - name: Ensure changelog exists
+        run: |
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "# Changelog" > $CHANGELOG_FILE
+            echo "" >> $CHANGELOG_FILE
+            echo "## [Unreleased]" >> $CHANGELOG_FILE
+            echo "- Initial version" >> $CHANGELOG_FILE
+          fi
+          cat $CHANGELOG_FILE
+      
+      
+      - name: Update changelog
+        run: |
+          version=$(cat $VERSION_FILE)
+          current_date=$(date +'%Y-%m-%d')
+          branch_name=${GITHUB_REF#refs/heads/}
+          
+          # Создаем временный файл
+          echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
+          mv temp_changelog $CHANGELOG_FILE
+          
+          echo "Updated changelog:"
+          cat $CHANGELOG_FILE
+      
+      
+      - name: Commit and push changelog
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'actions@github.com'
           git add $CHANGELOG_FILE
-          git commit -m "Initialize changelog" || echo "Changelog initialized"
-        fi
-    
-    - name: Update changelog
-      run: |
-        version=$(cat $VERSION_FILE)
-        current_date=$(date +'%Y-%m-%d')
-        branch_name=${GITHUB_REF#refs/heads/}
-        
-        echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
-        mv temp_changelog $CHANGELOG_FILE
-        
-        echo "Updated changelog:"
-        cat $CHANGELOG_FILE
-    
-    - name: Commit changelog
-      run: |
-        git config --global user.name 'GitHub Actions'
-        git config --global user.email 'actions@github.com'
-        git add $CHANGELOG_FILE
-        git commit -m "Update changelog for version $(cat $VERSION_FILE)" || echo "No changes to commit"
-        git push
-    
-    - name: Upload changelog
-      uses: actions/upload-artifact@v4
-      with:
-        name: changelog
-        path: $CHANGELOG_FILE
-    
-    - name: Add changelog label
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request'
-      with:
-        script: |
-          try {
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['changelog']
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
+          git commit -m "Update changelog for version $(cat $VERSION_FILE)" || echo "No changes to commit"
+          git push
+      
+      
+      - name: Upload changelog artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: changelog
+          path: changelog.md  
+          retention-days: 5
+  
+
 
   docker-publish:
     needs: changelog
@@ -263,25 +254,40 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-    - name: Download changelog
-      uses: actions/download-artifact@v4
-      with:
-        name: changelog
-    
-    - name: Get version
-      run: echo "VERSION=$(cat $VERSION_FILE)" >> $GITHUB_ENV
-    
-    - name: Send Telegram notification
-      uses: appleboy/telegram-action@master
-      with:
-        to: ${{ secrets.TELEGRAM_CHAT_ID }}
-        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        message: |
-          🚀 New version *v${{ env.VERSION }}* deployed!
-          📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
-          🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
-          🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-        document: $CHANGELOG_FILE
+      - name: Prepare changelog
+        run: |
+          if [ ! -f "$CHANGELOG_FILE" ]; then
+            echo "# Emergency Changelog" > $CHANGELOG_FILE
+            echo "## Version $(cat $VERSION_FILE)" >> $CHANGELOG_FILE
+            echo "- Created automatically" >> $CHANGELOG_FILE
+          fi
+      
+      - name: Download changelog artifact
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: changelog
+          
+      - name: Get current version
+        id: version
+        run: |
+          if [ -f "$VERSION_FILE" ]; then
+            echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
+          else
+            echo "version=0.0.0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Send Telegram notification
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
+            📅 Date: $(date +'%Y-%m-%d')
+            🐳 Docker image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.version.outputs.version }}
+            🔗 View changes: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
+          document: $CHANGELOG_FILE
 
   deploy-prod:
     needs: telegram-notify
