@@ -277,7 +277,7 @@ jobs:
               console.error('Error adding label:', error)
             }
 
- telegram-notify:
+  telegram-notify:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
