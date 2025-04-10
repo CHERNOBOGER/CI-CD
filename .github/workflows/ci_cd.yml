@@ -18,7 +18,7 @@ jobs:
   testing:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Run Unit Tests
       run: echo "Running unit tests..." && exit 0
@@ -48,7 +48,7 @@ jobs:
     needs: testing
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
     
     - name: Scan for vulnerabilities
       uses: aquasecurity/trivy-action@master
@@ -84,123 +84,106 @@ jobs:
     outputs:
       new_version: ${{ steps.set-version.outputs.new_version }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-  
-      - name: Initialize version file
-        id: init-version
-        run: |
-          if [ ! -f "version" ]; then
-            echo "0.0.0" > version
-            git add version
-            git config --global user.name 'GitHub Actions'
-            git config --global user.email 'actions@github.com'
-            git commit -m "Initialize version file [0.0.0]"
-            # Используем токен для аутентификации
-            git remote set-url origin https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
-            git push origin HEAD:${{ github.ref }}
-            echo "Initialized version file with 0.0.0"
-          else
-            echo "Version file exists"
-          fi
-  
-      - name: Determine version bump
-        id: bump-type
-        run: |
-          if [[ $GITHUB_REF == refs/heads/feature* ]]; then
-            echo "type=minor" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
-            echo "type=patch" >> $GITHUB_OUTPUT
-          else
-            echo "type=none" >> $GITHUB_OUTPUT
-          fi
-  
-      - name: Update version
-        id: set-version
-        if: steps.bump-type.outputs.type != 'none'
-        run: |
-          current_version=$(cat version)
-          IFS='.' read -ra parts <<< "$current_version"
-          
-          major=${parts[0]}
-          minor=${parts[1]}
-          patch=${parts[2]}
-  
-          if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
-            minor=$((minor + 1))
-            patch=0
-          else
-            patch=$((patch + 1))
-          fi
-  
-          new_version="$major.$minor.$patch"
-          echo "$new_version" > version
-          echo "new_version=$new_version" >> $GITHUB_OUTPUT
-          echo "Old version: $current_version"
-          echo "New version: $new_version"
-  
-      - name: Commit version update
-        if: steps.bump-type.outputs.type != 'none'
-        run: |
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Initialize version file
+      run: |
+        if [ ! -f "$VERSION_FILE" ]; then
+          echo "0.0.0" > $VERSION_FILE
+          git add $VERSION_FILE
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          git add version
-          git commit -m "[$(cat version)] version update"
+          git commit -m "Initialize version file [0.0.0]"
           git push
-          
+        fi
+    
+    - name: Determine version bump type
+      id: bump-type
+      run: |
+        if [[ $GITHUB_REF == refs/heads/feature* ]]; then
+          echo "type=minor" >> $GITHUB_OUTPUT
+        elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
+          echo "type=patch" >> $GITHUB_OUTPUT
+        else
+          echo "type=none" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Bump version
+      id: set-version
+      if: steps.bump-type.outputs.type != 'none'
+      run: |
+        current_version=$(cat $VERSION_FILE)
+        IFS='.' read -ra parts <<< "$current_version"
+        
+        if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
+          new_version="${parts[0]}.$((${parts[1]} + 1)).0"
+        else
+          new_version="${parts[0]}.${parts[1]}.$((${parts[2]} + 1))"
+        fi
+        
+        echo "$new_version" > $VERSION_FILE
+        echo "new_version=$new_version" >> $GITHUB_OUTPUT
+        echo "Version bumped from $current_version to $new_version"
+    
+    - name: Commit version update
+      if: steps.bump-type.outputs.type != 'none'
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add $VERSION_FILE
+        git commit -m "[$(cat $VERSION_FILE)] version update"
+        git push
+
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Initialize changelog
-        run: |
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "# Changelog" > $CHANGELOG_FILE
-            echo "" >> $CHANGELOG_FILE
-            echo "## [Unreleased]" >> $CHANGELOG_FILE
-            echo "- Initial version" >> $CHANGELOG_FILE
-          fi
-      
-      - name: Update changelog
-        if: needs.version-update.outputs.new_version
-        run: |
-          version=${GITHUB_REF#refs/tags/v}
-          if [ -z "$version" ]; then
-            version=$(cat $VERSION_FILE)
-          fi
-          
-          current_date=$(date +'%Y-%m-%d')
-          branch_name=${GITHUB_REF#refs/heads/}
-          
-          # Вставляем новую версию в начало файла
-          echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
-          mv temp_changelog $CHANGELOG_FILE
-          
-          # Показываем содержимое для отладки
-          cat $CHANGELOG_FILE
-      
-      - name: Commit changelog
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
-          git add $CHANGELOG_FILE
-          git commit -m "Update changelog for version $(cat $VERSION_FILE)"
-          git push
-      
-      - name: Upload changelog
-        uses: actions/upload-artifact@v4
-        with:
-          name: changelog
-          path: $CHANGELOG_FILE
+    - uses: actions/checkout@v4
+    
+    - name: Initialize changelog
+      run: |
+        if [ ! -f "$CHANGELOG_FILE" ]; then
+          echo "# Changelog" > $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+          echo "## [Unreleased]" >> $CHANGELOG_FILE
+          echo "- Initial version" >> $CHANGELOG_FILE
+        fi
+  
+    - name: Update changelog
+      run: |
+        version=$(cat $VERSION_FILE)
+        current_date=$(date +'%Y-%m-%d')
+        branch_name=${GITHUB_REF#refs/heads/}
+        
+        # Добавляем новую версию в начало файла
+        echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
+        mv temp_changelog $CHANGELOG_FILE
+        
+        echo "Updated changelog:"
+        cat $CHANGELOG_FILE
+    
+    - name: Commit changelog
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add $CHANGELOG_FILE
+        git commit -m "Update changelog for version $(cat $VERSION_FILE)"
+        git push
+    
+    - name: Upload changelog
+      uses: actions/upload-artifact@v4
+      with:
+        name: changelog
+        path: $CHANGELOG_FILE
 
   docker-publish:
-   needs: changelog
-   runs-on: ubuntu-latest
-   steps:
+    needs: changelog
+    runs-on: ubuntu-latest
+    steps:
     - uses: actions/checkout@v4
     
     - name: Login to Docker Hub
@@ -214,7 +197,7 @@ jobs:
       with:
         push: true
         tags: |
-          ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_tag }}
+          ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_version }}
           ${{ env.DOCKER_HUB_REPOSITORY }}:latest
     
     - name: Add dockerhub label
@@ -232,90 +215,69 @@ jobs:
           } catch (error) {
             console.error('Error adding label:', error)
           }
-          
+
   telegram-notify:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Check version file
-        run: |
-          if [ ! -f "version" ]; then
-            echo "0.0.0" > version
-          fi
-          echo "Current version: $(cat version)"
-          
-      - name: Send notification
-        uses: appleboy/telegram-action@master
-        with:
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          message: |
-            🚀 New version v$(cat version) deployed!
-            📅 Date: $(date +'%Y-%m-%d')
-            🔗 View changes: https://github.com/${{ github.repository }}/tree/${{ github.ref }}
+    - uses: actions/download-artifact@v4
+      with:
+        name: changelog
+    
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |
+          🚀 New version *v${{ needs.version-update.outputs.new_version }}* deployed!
+          📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
+          🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
+          🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+        document: $CHANGELOG_FILE
+
   deploy-prod:
     needs: telegram-notify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Get version
-        id: get-version
-        run: |
-          echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
-      
-      - name: Set up Docker
-        uses: docker/setup-docker-action@v3
-        
-      - name: Install docker-compose
-        run: |
-          sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-          sudo chmod +x /usr/local/bin/docker-compose
-          docker-compose --version
-          
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-          
-      - name: Deploy application
-        run: |
-          echo "Using image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.get-version.outputs.version }}"
-          docker-compose -f docker-compose.prod.yml down || true
-          docker-compose -f docker-compose.prod.yml pull
-          docker-compose -f docker-compose.prod.yml up -d
-          
-      - name: Verify deployment
-        run: |
-          docker ps
-          curl -s http://localhost:80 || echo "Service check failed"
-        
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker
+      uses: docker/setup-docker-action@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    
+    - name: Deploy with docker-compose
+      run: |
+        docker-compose -f docker-compose.prod.yml down || true
+        docker-compose -f docker-compose.prod.yml pull
+        docker-compose -f docker-compose.prod.yml up -d
+    
+    - name: Verify deployment
+      run: |
+        docker ps
+        curl -s http://localhost:80 || echo "Service check failed"
+
   create-release:
     needs: deploy-prod
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Get version
-        id: get-version
-        run: |
-          echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
-      
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: v${{ steps.get-version.outputs.version }}
-          name: Release v${{ steps.get-version.outputs.version }}
-          body: |
-            ### Changes
-            - Version: ${{ steps.get-version.outputs.version }}
-            - Branch: ${{ github.ref }}
-            - Commit: [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
-          files: ${{ env.CHANGELOG_FILE }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ needs.version-update.outputs.new_version }}
+        name: Release v${{ needs.version-update.outputs.new_version }}
+        body: |
+          This release includes changes from ${{ github.ref }}.
+          See [changelog]($CHANGELOG_FILE) for details.
+        files: $CHANGELOG_FILE
