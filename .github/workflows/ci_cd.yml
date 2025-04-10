@@ -26,7 +26,6 @@ jobs:
     - name: Run ${{ matrix.test-type }} Tests
       run: |
         echo "Running ${{ matrix.test-type }} tests..."
-        # Заглушка для тестов
         exit 0
     
     - name: Add test-passed label
@@ -90,6 +89,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Initialize version file
+        run: |
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo -n "0.0.0" > $VERSION_FILE
+            git add $VERSION_FILE
+            git config --global user.name 'GitHub Actions'
+            git config --global user.email 'actions@github.com'
+            git commit -m "Initialize version file [0.0.0]"
+            git push
+          fi
+          # Удаляем BOM если он есть
+          sed -i '1s/^\xEF\xBB\xBF//' $VERSION_FILE
       
       - name: Get current version
         id: get-version
@@ -137,6 +148,7 @@ jobs:
           git add $VERSION_FILE
           commit_message="[${{ steps.set-version.outputs.new_version }}] <- [${{ steps.get-version.outputs.old_version }}] ${{ steps.bump-type.outputs.type }} up"
           git commit -m "$commit_message"
+          git pull --rebase origin $GITHUB_REF_NAME
           git push
       
       - name: Add version label
@@ -196,6 +208,7 @@ jobs:
           git config --global user.email 'actions@github.com'
           git add $CHANGELOG_FILE
           git commit -m "Update changelog for version ${{ needs.version-update.outputs.new_version }}" || echo "No changes to commit"
+          git pull --rebase origin $GITHUB_REF_NAME
           git push
       
       - name: Upload changelog artifact
@@ -270,31 +283,36 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Download changelog artifact
-        uses: actions/download-artifact@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          name: changelog
-      
-      - name: Get version info
+          fetch-depth: 0
+  
+      - name: Get exact version
         id: version
         run: |
-          version=$(cat version | tr -d '\r\n')
-          echo "version=$version" >> $GITHUB_OUTPUT
-      
+          clean_version=$(cat version | tr -d '\r\n' | xargs)
+          if [ -z "$clean_version" ]; then
+            clean_version="0.0.0"
+          fi
+          echo "version=$clean_version" >> $GITHUB_OUTPUT
+          echo "Using version: $clean_version"
+  
       - name: Prepare changelog content
         id: changelog
         run: |
+          # Извлекаем изменения для текущей версии
           version=${{ steps.version.outputs.version }}
           changes=$(awk -v version="## [$version]" '$0 ~ version {flag=1; next} /^## / {flag=0} flag' changelog.md | sed '/^$/d' | sed 's/^/- /')
           
           if [ -z "$changes" ]; then
-            changes="No changes listed for this version"
+            changes="No changes listed"
           fi
           
           echo "changes<<EOF" >> $GITHUB_OUTPUT
           echo "$changes" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-      
+  
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
@@ -302,15 +320,12 @@ jobs:
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           parse_mode: markdown
           message: |
-            🚀 *New Release v${{ steps.version.outputs.version }}*
+            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
             
-            📦 Docker Image: [${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.version.outputs.version }}](https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags)
-            
-            📝 *Changes:*
+            📝 Changes:
             ${{ steps.changelog.outputs.changes }}
             
             🔗 [View full changelog](https://github.com/${{ github.repository }}/blob/main/changelog.md)
-            🔗 [View PR #${{ github.event.pull_request.number }}](${{ github.event.pull_request.html_url }})
 
   deploy-prod:
     needs: telegram-notify
