@@ -13,8 +13,6 @@ env:
   DOCKER_HUB_REPOSITORY: chernoboger/ci-cd
   VERSION_FILE: version
   CHANGELOG_FILE: changelog.md
-  DOCKER_HUB_USERNAME: chernoboger
-  DOCKER_HUB_TOKEN: dckr_pat_MSKwU_aFtcHT98w5vPZgTlTHrmI
 
 jobs:
   testing:
