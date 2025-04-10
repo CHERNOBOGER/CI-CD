@@ -50,6 +50,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Run Antivirus Scan
+      uses: actionshub/antivirus@main
+      with:
+        path: '.'
+    
     - name: Scan for vulnerabilities
       uses: aquasecurity/trivy-action@master
       with:
@@ -98,6 +103,7 @@ jobs:
           git commit -m "Initialize version file [0.0.0]"
           git push
         fi
+        cp $VERSION_FILE $VERSION_FILE.old
     
     - name: Determine version bump type
       id: bump-type
@@ -130,11 +136,28 @@ jobs:
     - name: Commit version update
       if: steps.bump-type.outputs.type != 'none'
       run: |
+        old_version=$(cat $VERSION_FILE.old)
         git config --global user.name 'GitHub Actions'
         git config --global user.email 'actions@github.com'
         git add $VERSION_FILE
-        git commit -m "[$(cat $VERSION_FILE)] version update"
+        git commit -m "[$(cat $VERSION_FILE)] <- [$old_version] ${{ steps.bump-type.outputs.type }} up"
         git push
+    
+    - name: Add version label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request' && steps.bump-type.outputs.type != 'none'
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['v${{ steps.set-version.outputs.new_version }}']
+            })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
   changelog:
     needs: version-update
@@ -142,52 +165,61 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      
-      
-      - name: Ensure changelog exists
-        run: |
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "# Changelog" > $CHANGELOG_FILE
-            echo "" >> $CHANGELOG_FILE
-            echo "## [Unreleased]" >> $CHANGELOG_FILE
-            echo "- Initial version" >> $CHANGELOG_FILE
-            git add $CHANGELOG_FILE
-            git commit -m "Initialize changelog" || echo "Changelog initialized"
-          fi
-          cat $CHANGELOG_FILE
-      
-      
-      - name: Update changelog
-        run: |
-          version=$(cat $VERSION_FILE)
-          current_date=$(date +'%Y-%m-%d')
-          branch_name=${GITHUB_REF#refs/heads/}
-          
-          # Добавляем новую запись
-          echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
-          mv temp_changelog $CHANGELOG_FILE
-          
-          echo "Updated changelog:"
-          cat $CHANGELOG_FILE
-      
-      
-      - name: Commit changelog updates
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'actions@github.com'
+    - uses: actions/checkout@v4
+    
+    - name: Initialize changelog
+      run: |
+        if [ ! -f "$CHANGELOG_FILE" ]; then
+          echo "# Changelog" > $CHANGELOG_FILE
+          echo "" >> $CHANGELOG_FILE
+          echo "## [Unreleased]" >> $CHANGELOG_FILE
+          echo "- Initial version" >> $CHANGELOG_FILE
           git add $CHANGELOG_FILE
-          git commit -m "Update changelog for version $(cat $VERSION_FILE)" || echo "No changes to commit"
-          git push
-      
-      
-      - name: Upload changelog artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: changelog
-          path: changelog.md
-          retention-days: 5
-          
+          git commit -m "Initialize changelog" || echo "Changelog initialized"
+        fi
+    
+    - name: Update changelog
+      run: |
+        version=$(cat $VERSION_FILE)
+        current_date=$(date +'%Y-%m-%d')
+        branch_name=${GITHUB_REF#refs/heads/}
+        
+        echo -e "## [$version] - $current_date\n- Merged branch: $branch_name\n\n$(cat $CHANGELOG_FILE)" > temp_changelog
+        mv temp_changelog $CHANGELOG_FILE
+        
+        echo "Updated changelog:"
+        cat $CHANGELOG_FILE
+    
+    - name: Commit changelog
+      run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add $CHANGELOG_FILE
+        git commit -m "Update changelog for version $(cat $VERSION_FILE)" || echo "No changes to commit"
+        git push
+    
+    - name: Upload changelog
+      uses: actions/upload-artifact@v4
+      with:
+        name: changelog
+        path: $CHANGELOG_FILE
+    
+    - name: Add changelog label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['changelog']
+            })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
+
   docker-publish:
     needs: changelog
     runs-on: ubuntu-latest
@@ -207,6 +239,14 @@ jobs:
         tags: |
           ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_version }}
           ${{ env.DOCKER_HUB_REPOSITORY }}:latest
+    
+    - name: Update Docker Hub description
+      run: |
+        curl -X PATCH \
+          -H "Authorization: Bearer ${{ secrets.DOCKER_HUB_TOKEN }}" \
+          -H "Content-Type: application/json" \
+          -d '{"full_description": "$(curl -s https://raw.githubusercontent.com/${{ github.repository }}/main/README.md | jq -sR)"}' \
+          https://hub.docker.com/v2/repositories/${{ env.DOCKER_HUB_REPOSITORY }}/
     
     - name: Add dockerhub label
       uses: actions/github-script@v6
@@ -228,56 +268,67 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Get version
-        id: version
-        run: |
-          if [ -f "$VERSION_FILE" ]; then
-            echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
-          else
-            echo "version=0.0.0" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-          
-      - name: Send Telegram notification
-        uses: appleboy/telegram-action@master
-        with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
-          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
-            🔗 Repository: https://github.com/${{ github.repository }}
-          document: $CHANGELOG_FILE
+    - name: Download changelog
+      uses: actions/download-artifact@v4
+      with:
+        name: changelog
+    
+    - name: Get version
+      run: echo "VERSION=$(cat $VERSION_FILE)" >> $GITHUB_ENV
+    
+    - name: Send Telegram notification
+      uses: appleboy/telegram-action@master
+      with:
+        to: ${{ secrets.TELEGRAM_CHAT_ID }}
+        token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        message: |
+          🚀 New version *v${{ env.VERSION }}* deployed!
+          📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
+          🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
+          🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+        document: $CHANGELOG_FILE
 
   deploy-prod:
     needs: telegram-notify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Docker
-        uses: docker/setup-docker-action@v3
-        
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_TOKEN }}
-          
-      - name: Deploy application
-        run: |
-          echo "Using image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_version }}"
-          docker compose -f docker-compose.prod.yml down || true
-          docker compose -f docker-compose.prod.yml pull
-          docker compose -f docker-compose.prod.yml up -d
-          
-      - name: Verify deployment
-        run: |
-          docker ps
-          curl -s http://localhost:80 || echo "Service check failed"
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker
+      uses: docker/setup-docker-action@v3
+    
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_HUB_USERNAME }}
+        password: ${{ secrets.DOCKER_HUB_TOKEN }}
+    
+    - name: Deploy with docker compose
+      run: |
+        docker compose -f docker-compose.prod.yml down || true
+        docker compose -f docker-compose.prod.yml pull
+        docker compose -f docker-compose.prod.yml up -d
+    
+    - name: Verify deployment
+      run: |
+        docker ps
+        curl -s http://localhost:80 || echo "Service check failed"
+    
+    - name: Add PROD label
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      with:
+        script: |
+          try {
+            await github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['PROD']
+            })
+          } catch (error) {
+            console.error('Error adding label:', error)
+          }
 
   create-release:
     needs: deploy-prod
@@ -295,6 +346,8 @@ jobs:
         tag_name: v${{ needs.version-update.outputs.new_version }}
         name: Release v${{ needs.version-update.outputs.new_version }}
         body: |
-          This release includes changes from ${{ github.ref }}.
-          See [changelog]($CHANGELOG_FILE) for details.
+          ### Changes in v${{ needs.version-update.outputs.new_version }}
+          - Branch: ${{ github.ref }}
+          - Commit: [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+          - [View Changelog](${{ github.server_url }}/${{ github.repository }}/blob/main/$CHANGELOG_FILE)
         files: $CHANGELOG_FILE
