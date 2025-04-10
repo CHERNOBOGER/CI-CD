@@ -257,39 +257,35 @@ jobs:
     needs: telegram-notify
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    
-    - name: Install Docker
-      uses: docker/setup-docker-action@v2
-    
+    - name: Add permissions
+      run: |
+        sudo groupadd docker || true
+        sudo usermod -aG docker $USER
+        newgrp docker
+        
+    - name: Set up Docker
+      uses: docker/setup-docker-action@v3
+      
+    - name: Install docker-compose
+      run: |
+        sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        docker-compose --version
+        
     - name: Login to Docker Hub
       uses: docker/login-action@v2
       with:
         username: ${{ secrets.DOCKER_HUB_USERNAME }}
         password: ${{ secrets.DOCKER_HUB_TOKEN }}
-    
-    - name: Deploy with Docker Compose
+        
+    - name: Deploy with docker-compose
       run: |
-        docker-compose down
-        docker-compose pull
-        docker-compose up -d
-    
-    - name: Add PROD label
-      uses: actions/github-script@v6
-      if: github.event_name == 'pull_request'
-      with:
-        script: |
-          try {
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['PROD']
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
+        docker-compose -f docker-compose.prod.yml down
+        docker-compose -f docker-compose.prod.yml pull
+        docker-compose -f docker-compose.prod.yml up -d
+        
+    - name: Verify containers
+      run: docker ps
 
   create-release:
     needs: deploy-prod
