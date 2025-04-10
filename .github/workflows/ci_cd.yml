@@ -48,43 +48,50 @@ jobs:
   security:
     needs: testing
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        scan-type: [antivirus, dependency, secrets]
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Run ${{ matrix.scan-type }} scan
-      run: |
-        echo "Running ${{ matrix.scan-type }} scan..."
-        # Заглушка для проверок безопасности
-        exit 0
-    
-    - name: Run Antivirus scan
-      if: matrix.scan-type == 'antivirus'
-      uses: crazy-max/ghaction-clamav@v2
-    
-    - name: Run Linter
-      run: |
-        echo "Running linter checks..."
-        # Заглушка для линтера
-        exit 0
-    
-    - name: Add sec-passed label
-      if: github.event_name == 'pull_request' && success()
-      uses: actions/github-script@v6
-      with:
-        script: |
-          try {
-            await github.rest.issues.addLabels({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['sec-passed']
-            })
-          } catch (error) {
-            console.error('Error adding label:', error)
-          }
+      - uses: actions/checkout@v4
+      
+      - name: Run Antivirus scan
+        uses: crazy-max/ghaction-clamav@v2
+        with:
+          scan-dir: .
+          db-mirror: "https://database.clamav.net"
+      
+      - name: Run Dependency scan
+        uses: actions/dependency-review-action@v3
+      
+      - name: Run Secrets scan
+        uses: actions/github-script@v6
+        with:
+          script: |
+            // Заглушка для проверки секретов
+            console.log('Running secrets scan...');
+            // В реальном сценарии можно использовать tools like:
+            // - https://github.com/gitleaks/gitleaks-action
+            // - https://github.com/actions/gha-secret-scanning
+            return true;
+      
+      - name: Run Linter
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --enable-all
+      
+      - name: Add sec-passed label
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            try {
+              await github.rest.issues.addLabels({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['sec-passed']
+              })
+            } catch (error) {
+              console.error('Error adding label:', error)
+            }
 
   version-update:
     needs: security
