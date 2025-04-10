@@ -239,28 +239,40 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Get version from previous job
-        id: version
+      - name: Get actual version
+        id: get-version
         run: |
-          echo "version=${{ needs.version-update.outputs.new_version || '0.0.0' }}" >> $GITHUB_OUTPUT
+          # Читаем версию из файла, удаляя все лишние символы
+          version=$(cat version | tr -d '\r\n' | xargs)
+          echo "version=${version:-0.0.0}" >> $GITHUB_OUTPUT
+          echo "Actual version: ${version:-0.0.0}"
       
-      - name: Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-        continue-on-error: true
+      - name: Prepare changelog
+        run: |
+          if [ ! -f "changelog.md" ]; then
+            echo "# Changelog" > changelog.md
+            echo "## [Unreleased]" >> changelog.md
+          fi
+      
+      - name: Create notification message
+        id: create-message
+        run: |
+          current_date=$(date +'%Y-%m-%d')
+          message="🚀 New release: *v${{ steps.get-version.outputs.version }}*"
+          message+="%0A%0A📝 *Changes in this version:*"
+          message+="%0A$(grep -A 5 "## \[${{ steps.get-version.outputs.version }}" changelog.md | tail -n +2 | sed '/^##/q' | head -n -1 | sed 's/^/- /')"
+          message+="%0A%0A🔗 *Full changelog:*"
+          message+="%0Ahttps://github.com/${{ github.repository }}/blob/main/changelog.md"
+          
+          echo "message=${message}" >> $GITHUB_OUTPUT
       
       - name: Send Telegram notification
         uses: appleboy/telegram-action@master
         with:
           to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          message: |
-            🚀 New version *v${{ steps.version.outputs.version }}* deployed!
-            📅 Date: $(date +'%Y-%m-%d')
-            🐳 Docker image: ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ steps.version.outputs.version }}
-            🔗 View changes: https://github.com/${{ github.repository }}/blob/main/changelog.md
-          document: changelog.md
+          message: ${{ steps.create-message.outputs.message }}
+          parse_mode: markdown
 
   deploy-prod:
     needs: telegram-notify
