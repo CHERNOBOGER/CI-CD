@@ -257,7 +257,7 @@ jobs:
     needs: telegram-notify
     runs-on: ubuntu-latest
     env:
-      DOCKER_HUB_REPOSITORY: ${{ env.DOCKER_HUB_REPOSITORY }}
+      DOCKER_HUB_REPOSITORY: ${{ vars.DOCKER_HUB_REPOSITORY }}
       VERSION: ${{ needs.version-update.outputs.new_tag }}
   
     steps:
@@ -280,15 +280,10 @@ jobs:
         
       - name: Deploy application
         run: |
-          echo "Using image: ${DOCKER_HUB_REPOSITORY}:v${VERSION}"
-          docker-compose -f docker-compose.prod.yml down
+          echo "Using image: $DOCKER_HUB_REPOSITORY:v$VERSION"
+          docker-compose -f docker-compose.prod.yml down || true
           docker-compose -f docker-compose.prod.yml pull
           docker-compose -f docker-compose.prod.yml up -d
-        
-      - name: Verify deployment
-        run: |
-          docker ps
-          curl -s http://localhost:80 || echo "Service check failed"
         
   create-release:
     needs: deploy-prod
