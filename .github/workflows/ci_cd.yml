@@ -198,10 +198,10 @@ jobs:
         path: ${{ env.CHANGELOG_FILE }}
 
   docker-publish:
-    needs: changelog
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
+   needs: changelog
+   runs-on: ubuntu-latest
+   steps:
+    - uses: actions/checkout@v4
     
     - name: Login to Docker Hub
       uses: docker/login-action@v2
@@ -216,16 +216,6 @@ jobs:
         tags: |
           ${{ env.DOCKER_HUB_REPOSITORY }}:v${{ needs.version-update.outputs.new_tag }}
           ${{ env.DOCKER_HUB_REPOSITORY }}:latest
-        build-args: |
-          VERSION=${{ needs.version-update.outputs.new_tag }}
-    
-    - name: Update Docker Hub description
-      run: |
-        curl -X PATCH \
-          -H "Content-Type: application/json" \
-          -H "Authorization: JWT ${{ secrets.DOCKER_HUB_TOKEN }}" \
-          -d '{"full_description": "$(cat README.md | jq -Rs .)"}' \
-          "https://hub.docker.com/v2/repositories/${{ env.DOCKER_HUB_REPOSITORY }}/"
     
     - name: Add dockerhub label
       uses: actions/github-script@v6
@@ -242,7 +232,7 @@ jobs:
           } catch (error) {
             console.error('Error adding label:', error)
           }
-
+          
   telegram-notify:
     needs: docker-publish
     runs-on: ubuntu-latest
