@@ -80,19 +80,29 @@ jobs:
     needs: security
     runs-on: ubuntu-latest
     outputs:
-      new_version: ${{ steps.bump-version.outputs.new_tag }}
+      new_version: ${{ steps.set-version.outputs.new_version }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      
+  
       - name: Initialize version file
+        id: init-version
         run: |
-          if [ ! -f "$VERSION_FILE" ]; then
-            echo "0.0.0" > $VERSION_FILE
+          if [ ! -f "version" ]; then
+            echo "0.0.0" > version
+            git add version
+            git config --global user.name 'GitHub Actions'
+            git config --global user.email 'actions@github.com'
+            git commit -m "Initialize version file [0.0.0]"
+            git push
+            echo "Initialized version file with 0.0.0"
+          else
+            echo "Version file exists"
           fi
-      
-      - name: Determine version bump type
+          echo "Current version: $(cat version)"
+  
+      - name: Determine version bump
         id: bump-type
         run: |
           if [[ $GITHUB_REF == refs/heads/feature* ]]; then
@@ -102,39 +112,40 @@ jobs:
           else
             echo "type=none" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Bump version
-        id: bump-version
+  
+      - name: Update version
+        id: set-version
         if: steps.bump-type.outputs.type != 'none'
         run: |
-          current_version=$(cat $VERSION_FILE)
+          current_version=$(cat version)
           IFS='.' read -ra parts <<< "$current_version"
+          
           major=${parts[0]}
           minor=${parts[1]}
           patch=${parts[2]}
-          
+  
           if [ "${{ steps.bump-type.outputs.type }}" = "minor" ]; then
             minor=$((minor + 1))
             patch=0
           else
             patch=$((patch + 1))
           fi
-          
+  
           new_version="$major.$minor.$patch"
-          echo "$new_version" > $VERSION_FILE
-          echo "new_tag=v$new_version" >> $GITHUB_OUTPUT
+          echo "$new_version" > version
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
           echo "Old version: $current_version"
           echo "New version: $new_version"
-      
+  
       - name: Commit version update
-        if: steps.bump-version.outputs.new_tag
+        if: steps.bump-type.outputs.type != 'none'
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
-          git add $VERSION_FILE
-          git commit -m "[$(cat $VERSION_FILE)] version update"
+          git add version
+          git commit -m "[$(cat version)] version update"
           git push
-
+          
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
@@ -222,27 +233,22 @@ jobs:
     needs: docker-publish
     runs-on: ubuntu-latest
     steps:
-      - name: Download changelog
-        uses: actions/download-artifact@v4
-        with:
-          name: changelog
-      
-      - name: Get version
-        id: get-version
+      - name: Check version file
         run: |
-          echo "version=$(cat $VERSION_FILE)" >> $GITHUB_OUTPUT
-      
-      - name: Send Telegram notification
+          if [ ! -f "version" ]; then
+            echo "0.0.0" > version
+          fi
+          echo "Current version: $(cat version)"
+          
+      - name: Send notification
         uses: appleboy/telegram-action@master
         with:
-          to: ${{ secrets.TELEGRAM_CHAT_ID }}
           token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
           message: |
-            🚀 New version *v${{ steps.get-version.outputs.version }}* deployed!
-            📝 Changelog: https://github.com/${{ github.repository }}/blob/main/$CHANGELOG_FILE
-            🐳 Docker image: https://hub.docker.com/r/${{ env.DOCKER_HUB_REPOSITORY }}/tags
-            🔗 PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-          file: $CHANGELOG_FILE
+            🚀 New version v$(cat version) deployed!
+            📅 Date: $(date +'%Y-%m-%d')
+            🔗 View changes: https://github.com/${{ github.repository }}/tree/${{ github.ref }}
   deploy-prod:
     needs: telegram-notify
     runs-on: ubuntu-latest
