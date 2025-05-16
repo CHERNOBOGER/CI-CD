@@ -1,6 +1,9 @@
 ## [] - 2025-05-16
 - Merged branch: main
 
+## [] - 2025-05-16
+- Merged branch: main
+
 ## [0.1.3] - 2025-04-10
 - Merged branch: hotfix/repair-telegram
 
