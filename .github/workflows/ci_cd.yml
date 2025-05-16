@@ -3,13 +3,16 @@ name: CI/CD Pipeline
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    branches: [main, feature/*, hotfix/*]
+    branches:
+      - main
+      - feature/*
+      - hotfix/*
   
   push:
-    branches: [main]
-    paths: ['version']
-  
-  workflow_dispatch:
+    branches:
+      - main
+    paths:
+      - 'version'
 
 env:
   DOCKER_HUB_REPOSITORY: chernoboger/ci-cd
