@@ -12,6 +12,7 @@ on:
       - main
     paths:
       - 'version'
+  workflow_dispatch:
 
 env:
   DOCKER_HUB_REPOSITORY: chernoboger/ci-cd
