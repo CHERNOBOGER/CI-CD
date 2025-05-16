@@ -2,12 +2,16 @@ name: CI/CD Pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-  push:
+    types: [opened, synchronize, reopened, closed]
     branches:
       - main
       - feature/*
       - hotfix/*
+  push:
+    branches:
+      - main
+    paths:
+      - 'version'
 
 env:
   DOCKER_HUB_REPOSITORY: chernoboger/ci-cd
@@ -91,7 +95,9 @@ jobs:
           fetch-depth: 0
       - name: Initialize version file
         run: |
-          if [ ! -f "$VERSION_FILE" ]; then
+          if: |
+            github.event_name == 'pull_request' ||
+            (github.event_name == 'push' && github.ref == 'refs/heads/main') [ ! -f "$VERSION_FILE" ]; then
             echo -n "0.0.0" > $VERSION_FILE
             git add $VERSION_FILE
             git config --global user.name 'GitHub Actions'
@@ -172,9 +178,10 @@ jobs:
     permissions:
       contents: write
     if: |
-      github.event_name == 'pull_request' || 
-      (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, 'Merge pull request'))
-    
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      (github.event_name == 'push' && 
+       github.ref == 'refs/heads/main' &&
+       contains(github.event.head_commit.message, 'Merge pull request'))
     steps:
       - uses: actions/checkout@v4
         with:
