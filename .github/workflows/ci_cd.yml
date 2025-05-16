@@ -90,31 +90,17 @@ jobs:
       new_version: ${{ steps.set-version.outputs.new_version }}
       old_version: ${{ steps.get-version.outputs.old_version }}
       bump_type: ${{ steps.bump-type.outputs.type }}
+      should_update: ${{ steps.bump-type.outputs.type != 'none' }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
-      - name: Initialize version file
-        if: |
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'push' && github.ref == 'refs/heads/main')
-        run: |
-          if [ ! -f "$VERSION_FILE" ]; then
-            echo -n "0.0.0" > $VERSION_FILE
-            git add $VERSION_FILE
-            git config --global user.name 'GitHub Actions'
-            git config --global user.email 'actions@github.com'
-            git commit -m "Initialize version file [0.0.0]"
-            git push
-          fi
-          sed -i '1s/^\xEF\xBB\xBF//' $VERSION_FILE
-      
       - name: Get current version
         id: get-version
         run: |
           if [ ! -f "$VERSION_FILE" ]; then
-            echo "1.0.0" > $VERSION_FILE
+            echo "0.0.0" > $VERSION_FILE
           fi
           current_version=$(cat $VERSION_FILE | tr -d '\r\n')
           echo "old_version=$current_version" >> $GITHUB_OUTPUT
@@ -122,13 +108,14 @@ jobs:
       - name: Determine version bump type
         id: bump-type
         run: |
-          if [[ $GITHUB_REF == refs/heads/feature* ]]; then
+          if [[ $GITHUB_REF == refs/heads/feature* || $GITHUB_HEAD_REF == feature* ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/heads/hotfix* ]]; then
+          elif [[ $GITHUB_REF == refs/heads/hotfix* || $GITHUB_HEAD_REF == hotfix* ]]; then
             echo "type=patch" >> $GITHUB_OUTPUT
           else
             echo "type=none" >> $GITHUB_OUTPUT
           fi
+          echo "Branch: $GITHUB_REF, Head ref: $GITHUB_HEAD_REF"
       
       - name: Bump version
         id: set-version
@@ -179,39 +166,26 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    if: |
-      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-      (github.event_name == 'push' && 
-       github.ref == 'refs/heads/main' &&
-       contains(github.event.head_commit.message, 'Merge pull request'))
+    if: github.event_name == 'pull_request' && github.event.action != 'closed'
+    
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
+      - name: Debug outputs
+        run: |
+          echo "New version: ${{ needs.version-update.outputs.new_version }}"
+          echo "Old version: ${{ needs.version-update.outputs.old_version }}"
+          echo "Should update: ${{ needs.version-update.outputs.should_update }}"
+      
       - name: Get branch name
         id: get-branch
         run: |
-          # Для PR берём ветку-источник, для push - анализируем сообщение мержа
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
-          else
-            # Извлекаем номер PR из сообщения мержа
-            pr_branch=$(git log -1 --pretty=%B | grep -oP 'Merge pull request #\K\d+')
-            echo "branch=pr-$pr_branch" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: Ensure changelog exists
-        run: |
-          if [ ! -f "$CHANGELOG_FILE" ]; then
-            echo "# Changelog" > $CHANGELOG_FILE
-            echo "" >> $CHANGELOG_FILE
-            echo "## [Unreleased]" >> $CHANGELOG_FILE
-            echo "- Initial version" >> $CHANGELOG_FILE
-          fi
+          echo "branch=${{ github.head_ref || github.ref_name }}" >> $GITHUB_OUTPUT
       
       - name: Update changelog
-        if: needs.version-update.outputs.new_version != needs.version-update.outputs.old_version
+        if: needs.version-update.outputs.should_update == 'true'
         run: |
           version=${{ needs.version-update.outputs.new_version }}
           current_date=$(date +'%Y-%m-%d')
