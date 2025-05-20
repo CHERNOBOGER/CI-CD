@@ -95,8 +95,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.head_ref || github.ref }}
-      
+          ref: ${{ github.event.pull_request.head.sha || github.sha }} # Ключевое изменение!
+  
       - name: Get current version
         id: get-version
         run: |
@@ -105,19 +105,18 @@ jobs:
           fi
           current_version=$(cat $VERSION_FILE | tr -d '\r\n')
           echo "old_version=$current_version" >> $GITHUB_OUTPUT
-      
+  
       - name: Determine version bump type
         id: bump-type
         run: |
-          if [[ $GITHUB_REF == refs/heads/feature* || $GITHUB_HEAD_REF == feature* ]]; then
+          if [[ "$GITHUB_REF" == refs/heads/feature* || "$GITHUB_HEAD_REF" == feature* ]]; then
             echo "type=minor" >> $GITHUB_OUTPUT
-          elif [[ $GITHUB_REF == refs/heads/hotfix* || $GITHUB_HEAD_REF == hotfix* ]]; then
+          elif [[ "$GITHUB_REF" == refs/heads/hotfix* || "$GITHUB_HEAD_REF" == hotfix* ]]; then
             echo "type=patch" >> $GITHUB_OUTPUT
           else
             echo "type=none" >> $GITHUB_OUTPUT
           fi
-          echo "Branch: $GITHUB_REF, Head ref: $GITHUB_HEAD_REF"
-      
+  
       - name: Bump version
         id: set-version
         if: steps.bump-type.outputs.type != 'none'
@@ -134,34 +133,25 @@ jobs:
           echo "$new_version" > $VERSION_FILE
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
           echo "old_version=$current_version" >> $GITHUB_OUTPUT
-          echo "Version bumped from $current_version to $new_version"
-      
+  
       - name: Commit version update
         if: steps.bump-type.outputs.type != 'none'
         run: |
           git config --global user.name 'GitHub Actions'
           git config --global user.email 'actions@github.com'
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
           git add $VERSION_FILE
           commit_message="[${{ steps.set-version.outputs.new_version }}] <- [${{ steps.get-version.outputs.old_version }}] ${{ steps.bump-type.outputs.type }} up"
           git commit -m "$commit_message"
-          git pull --rebase origin $GITHUB_REF_NAME
-          git push
-      
-      - name: Add version label
-        if: github.event_name == 'pull_request' && steps.bump-type.outputs.type != 'none'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            try {
-              await github.rest.issues.addLabels({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: ['v${{ steps.set-version.outputs.new_version }}']
-              })
-            } catch (error) {
-              console.error('Error adding label:', error)
-            }
+        
+          if [ -n "${{ github.head_ref }}" ]; then
+            branch_name="${{ github.head_ref }}"
+          else
+            branch_name="${{ github.ref_name }}"
+          fi
+        
+          git push origin HEAD:$branch_name --force
+          
   changelog:
     needs: version-update
     runs-on: ubuntu-latest
